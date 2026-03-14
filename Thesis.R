@@ -23,7 +23,7 @@ Data <- Data %>%
   rename(
     country                = `Country`,
     year                   = `Year`,
-    gdp_ppp                = `GDP (ppp)`,
+    gdp                    = `GDP`,
     output_gap             = `Outputgab`,
     inflation              = `Inflation (prc_hicp_aind)`,
     population             = `Population (demo_pjan)`,
@@ -54,6 +54,9 @@ Data <- Data %>%
     gdp_deflator           = `GDP Deflator: Price index (implicit deflator), 2020=100, euro`
   )
 
+Data %>% filter(country == "Denmark") %>% 
+  select(year, gdp) %>% head(5)
+
 cols_to_numeric <- c(
   "capital_stock",
   "rd_expenditure", 
@@ -75,6 +78,14 @@ cols_to_numeric <- c(
 Data <- Data %>%
   mutate(across(all_of(cols_to_numeric), as.numeric))
 
+# Convert 0s to NA for variables where 0 means missing/unreported
+Data <- Data %>%
+  mutate(
+    rd_defence      = ifelse(rd_defence == 0, NA, rd_defence),
+    foreign_aid_1   = ifelse(foreign_aid_1 == 0, NA, foreign_aid_1)
+  )
+
+
 # ============================================================
 # STEP 2: DEFLATE NOMINAL MILLION-EURO VARIABLES
 # Divide by (gdp_deflator / 100) to get real 2020 euros
@@ -82,6 +93,7 @@ Data <- Data %>%
 # ============================================================
 
 vars_to_deflate <- c(
+  "gdp",
   "capital_stock",
   "gov_consumption",
   "tax_revenues",
@@ -113,18 +125,25 @@ Data %>% filter(country == "Denmark") %>%
 
 Data <- Data %>%
   mutate(
-    capital_stock_pc     = (capital_stock_real / population) * 10000,
-    gov_consumption_pc   = (gov_consumption_real / population) * 10000,
-    tax_revenues_pc      = (tax_revenues_real / population) * 10000,
-    rd_expenditure_pc    = (rd_expenditure_real / population) * 10000,
-    private_invest_pc    = (private_investment_real / population) * 10000,
-    milex_total_pc       = (milex_total_real / population) * 10000,
-    rd_defence_pc        = (rd_defence_real / population) * 10000,
-    personnel_pc         = (personnel_1_real / population) * 10000,
-    intermediate_pc      = (intermediate_1_real / population) * 10000,
-    gfcf_pc              = (gfcf_1_real / population) * 1000,
-    foreign_aid_1_pc     = (foreign_aid_1_real / population) * 1000
+    gdp_pc               = (gdp_real * 1000000) / population,
+    capital_stock_pc     = (capital_stock_real * 1000000) / population,
+    gov_consumption_pc   = (gov_consumption_real * 1000000) / population,
+    tax_revenues_pc      = (tax_revenues_real * 1000000) / population,
+    rd_expenditure_pc    = (rd_expenditure_real * 1000000) / population,
+    private_invest_pc    = (private_investment_real * 1000000) / population,
+    milex_total_pc       = (milex_total_real * 1000000) / population,
+    rd_defence_pc        = (rd_defence_real * 1000000) / population,
+    personnel_pc         = (personnel_1_real * 1000000) / population,
+    intermediate_pc      = (intermediate_1_real * 1000000) / population,
+    gfcf_pc              = (gfcf_1_real * 1000000) / population,
+    foreign_aid_1_pc     = (foreign_aid_1_real * 1000000) / population
   )
+
+Data %>% filter(country == "Denmark") %>% 
+  select(year, gdp, gdp_real, gdp_pc) %>% 
+  head(5)
+Data %>% filter(country == "Denmark", year == 2020) %>% 
+  select(year, gdp, gdp_real, gdp_pc)
 
 # ============================================================
 # STEP 4: DESCRIPTIVE STATISTICS
@@ -188,6 +207,220 @@ desc_stats <- bind_cols(desc_levels, desc_pcts) %>%
 
 print(n=40,desc_stats)
 write.csv(desc_stats, "descriptive_statistics.csv", row.names = FALSE)
+
+Data %>% filter(milex_total == max(milex_total, na.rm=TRUE)) %>% 
+  select(country, year, milex_total)
+Data %>% filter(tax_revenues_pc == max(tax_revenues_pc, na.rm=TRUE)) %>% 
+  select(country, year, tax_revenues_pc)
+
+# ============================================================
+# DESCRIPTIVE STATISTICS TABLE FOR OVERLEAF
+# ============================================================
+
+library(tidyverse)
+
+# Select the variables we want in the table
+table_vars <- c(
+  # GDP
+  "gdp_pc",
+  # Control variables
+  "output_gap",
+  "inflation",
+  "population",
+  "capital_stock_pc",
+  "gov_consumption_pc",
+  "tax_revenues_pc",
+  "rd_expenditure_pc",
+  "human_capital",
+  "interest_rate",
+  "private_invest_pc",
+  "unemployment",
+  "import_share",
+  # SIPRI military spending
+  "spiri_milex_share_gdp",
+  "spiri_milex_per_capita",
+  "spiri_milex_share_govspend",
+  # Eurostat military spending
+  "milex_total_pc",
+  "foreign_aid_1_pc",
+  "rd_defence_pc",
+  "personnel_pc",
+  "intermediate_pc",
+  "gfcf_pc"
+)
+
+# Clean variable labels for the table
+var_labels <- c(
+  "GDP per capita",
+  # Controls
+  "Output gap (\\%)",
+  "Inflation, HICP (\\%)",
+  "Population",
+  "Capital stock",
+  "Government consumption",
+  "Tax revenues",
+  "R\\&D expenditure",
+  "Human capital",
+  "Interest rate (\\%)",
+  "Private investment",
+  "Unemployment rate (\\%)",
+  "Import share (\\% GDP)",
+  # SIPRI
+  "Milex, share of GDP",
+  "Milex, per capita (USD)",
+  "Milex, share of gov. spending",
+  # Eurostat
+  "Total defence expenditure",
+  "Foreign military aid",
+  "Defence R\\&D",
+  "Personnel expenditure",
+  "Intermediate consumption",
+  "Gross fixed capital formation"
+)
+
+# Compute statistics
+desc_table <- Data %>%
+  select(all_of(table_vars)) %>%
+  summarise(across(
+    everything(),
+    list(
+      Mean   = ~round(mean(., na.rm = TRUE), 2),
+      SD     = ~round(sd(., na.rm = TRUE), 2),
+      Min    = ~round(min(., na.rm = TRUE), 2),
+      Median = ~round(median(., na.rm = TRUE), 2),
+      Max    = ~round(max(., na.rm = TRUE), 2),
+      N      = ~sum(!is.na(.))
+    ),
+    .names = "{.col}__{.fn}"
+  )) %>%
+  pivot_longer(everything(),
+               names_to = c("Variable", "Stat"),
+               names_sep = "__") %>%
+  pivot_wider(names_from = Stat, values_from = value) %>%
+  mutate(Variable = var_labels)
+
+# Generate LaTeX code
+latex_table <- paste0(
+  "\\begin{table}[htbp]\n",
+  "\\centering\n",
+  "\\caption{Descriptive Statistics}\n",
+  "\\label{tab:desc_stats}\n",
+  "\\small\n",
+  "\\begin{adjustbox}{max width=\\textwidth}\n",
+  "\\begin{tabular}{llrrrrrr}\n",
+  "\\hline\\hline\n",
+  "Variables (per capita, constant prices, in euros) & Data source & Min & Mean & Median & Max & Std. dev. & N \\\\\n",
+  "\\hline\n",
+  "\\multicolumn{8}{l}{\\textit{GDP and Controls}} \\\\\n"
+)
+
+# Add rows
+for (i in 1:nrow(desc_table)) {
+  # Add section headers
+  if (i == 14) latex_table <- paste0(latex_table, 
+                                     "\\multicolumn{7}{l}{\\textit{SIPRI Military Spending}} \\\\\n")
+  if (i == 17) latex_table <- paste0(latex_table, 
+                                     "\\multicolumn{7}{l}{\\textit{Eurostat Military Spending}} \\\\\n")
+  
+  row <- desc_table[i, ]
+  latex_table <- paste0(
+    latex_table,
+    row$Variable, " & ",
+    formatC(row$Mean, format = "f", digits = 2), " & ",
+    formatC(row$SD, format = "f", digits = 2), " & ",
+    formatC(row$Min, format = "f", digits = 2), " & ",
+    formatC(row$Median, format = "f", digits = 2), " & ",
+    formatC(row$Max, format = "f", digits = 2), " & ",
+    row$N, " \\\\\n"
+  )
+}
+
+latex_table <- paste0(
+  "\\begin{table}[htbp]\n",
+  "\\centering\n",
+  "\\caption{Descriptive Statistics}\n",
+  "\\label{tab:desc_stats}\n",
+  "\\small\n",
+  "\\begin{adjustbox}{max width=\\textwidth}\n",
+  "\\begin{tabular}{llrrrrrr}\n",
+  "\\hline\\hline\n",
+  "Variables & Data source & Min & Mean & Median & Max & Std. dev. & N \\\\n",
+  "\\hline\n",
+  "\\multicolumn{8}{l}{\\textit{GDP and Controls}} \\\\\n"
+)
+# Data sources for each variable
+data_sources <- c(
+  "Eurostat",    # gdp_ppp
+  "AMECO",       # output_gap
+  "Eurostat",    # inflation
+  "Eurostat",    # population
+  "Eurostat",    # capital_stock
+  "Eurostat",    # gov_consumption
+  "Eurostat",    # tax_revenues
+  "Eurostat",    # rd_expenditure
+  "Eurostat",    # human_capital
+  "Eurostat",    # interest_rate
+  "Eurostat",    # private_investment
+  "Eurostat",    # unemployment
+  "Eurostat",    # import_share
+  "SIPRI",       # spiri_milex_share_gdp
+  "SIPRI",       # spiri_milex_per_capita
+  "SIPRI",       # spiri_milex_share_govspend
+  "Eurostat",    # milex_total
+  "Eurostat",    # foreign_aid
+  "Eurostat",    # rd_defence
+  "Eurostat",    # personnel
+  "Eurostat",    # intermediate
+  "Eurostat"     # gfcf
+)
+
+# Add data sources to desc_table
+desc_table$Source <- data_sources
+
+# Generate rows with source column
+for (i in 1:nrow(desc_table)) {
+  if (i == 14) latex_table <- paste0(latex_table,
+                                     "\\multicolumn{8}{l}{\\textit{SIPRI Military Spending}} \\\\\n")
+  if (i == 17) latex_table <- paste0(latex_table,
+                                     "\\multicolumn{8}{l}{\\textit{Eurostat Military Spending}} \\\\\n")
+  
+  row <- desc_table[i, ]
+  latex_table <- paste0(
+    latex_table,
+    row$Variable, " & ",
+    row$Source, " & ",
+    formatC(row$Min, format = "f", digits = 2), " & ",
+    formatC(row$Mean, format = "f", digits = 2), " & ",
+    formatC(row$Median, format = "f", digits = 2), " & ",
+    formatC(row$Max, format = "f", digits = 2), " & ",
+    formatC(row$SD, format = "f", digits = 2), " & ",
+    row$N, " \\\\\n"
+  )
+}
+
+latex_table <- paste0(
+  latex_table,
+  "\\hline\\hline\n",
+  "\\multicolumn{8}{l}{\\footnotesize Note: All real variables deflated by GDP deflator (2020=100).} \\\\\n",
+  "\\multicolumn{8}{l}{\\footnotesize Sources: Eurostat, SIPRI, AMECO.} \\\\\n",
+  "\\end{tabular}\n",
+  "\\end{adjustbox}\n",
+  "\\end{table}\n"
+)
+
+cat(latex_table)
+writeLines(latex_table, "descriptive_statistics.tex")
+
+print(desc_table)
+
+Data %>%
+  summarise(
+    Mean = mean(spiri_milex_share_govspend, na.rm = TRUE),
+    SD   = sd(spiri_milex_share_govspend, na.rm = TRUE),
+    Min  = min(spiri_milex_share_govspend, na.rm = TRUE),
+    Max  = max(spiri_milex_share_govspend, na.rm = TRUE),
+    median(spiri_milex_share_govspend)
+  )
 
 # ============================================================
 # STEP 5: CREATE LOG FIRST DIFFERENCES
