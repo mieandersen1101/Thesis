@@ -1,6 +1,7 @@
 rm(list=ls())
 
-install.packages("httr2")
+install.packages("httr2")¨
+install.packages("tidyverse")
 library(httr2)
 
 FOR_R$Year <- as.integer(FOR_R$Year)
@@ -44,13 +45,12 @@ Data <- Data %>%
     personnel_1            = `Compensation to employees COFOG = GF0201 (or GF02), ESA item = D1...21`,
     intermediate_1         = `Intermediate consumption COFOG (GF02 - P2)`,
     gfcf_1                 = `Gross fixed capital formation COFOG - GF02 - P51G...23`,
-    other_milex            = `Other`,
     import_share           = `Import share`,
-    personnel_pct          = `Compensation to employees COFOG = GF0201 (or GF02), ESA item = D1...26`,
+    personnel_pct          = `Compensation to employees COFOG = GF0201 (or GF02), ESA item = D1...25`,
     intermediate_pct       = `Intermediate consumption`,
-    gfcf_pct               = `Gross fixed capital formation COFOG - GF02 - P51G...28`,
+    gfcf_pct               = `Gross fixed capital formation COFOG - GF02 - P51G...27`,
     milex_total_pct        = `Total defence expenditure`,
-    foreign_aid_pct        = `Foreign military aid - (GF0203 - TE)...30`,
+    foreign_aid_pct        = `Foreign military aid - (GF0203 - TE)...29`,
     gdp_deflator           = `GDP Deflator: Price index (implicit deflator), 2020=100, euro`
   )
 
@@ -66,7 +66,6 @@ cols_to_numeric <- c(
   "personnel_1",
   "intermediate_1",
   "gfcf_1",
-  "other_milex",
   "import_share",
   "personnel_pct",
   "intermediate_pct",
@@ -118,10 +117,6 @@ Data <- Data %>%
 # STEP 3: CREATE REAL PER CAPITA VARIABLES
 # Divide each real variable by population
 # ============================================================
-# (dividing millions by individual people gives tiny numbers)
-Data %>% filter(country == "Denmark") %>% 
-  select(year, gdp_ppp, population) %>% 
-  head(5)
 
 Data <- Data %>%
   mutate(
@@ -449,16 +444,27 @@ Data <- Data %>%
 # multiplier = beta * (mean GDP / mean spending variable)
 # ============================================================
 
-conversion_factors <- Data %>%
+# CORRECT: conversion factor from the SAME per capita variables used in dlog_gdp and dlog_milex
+conversion_factors_pc <- Data %>%
   group_by(country) %>%
   summarise(
-    cf_milex        = mean(gdp_real, na.rm = TRUE) / mean(milex_total_real, na.rm = TRUE),
-    cf_personnel    = mean(gdp_real, na.rm = TRUE) / mean(personnel_1_real, na.rm = TRUE),
-    cf_intermediate = mean(gdp_real, na.rm = TRUE) / mean(intermediate_1_real, na.rm = TRUE),
-    cf_gfcf         = mean(gdp_real, na.rm = TRUE) / mean(gfcf_1_real, na.rm = TRUE),
-    cf_rd_defence   = mean(gdp_real, na.rm = TRUE) / mean(rd_defence_real, na.rm = TRUE)
+    cf_milex        = mean(gdp_pc, na.rm = TRUE) / mean(milex_total_pc, na.rm = TRUE),
+    cf_personnel    = mean(gdp_pc, na.rm = TRUE) / mean(personnel_pc, na.rm = TRUE),
+    cf_intermediate = mean(gdp_pc, na.rm = TRUE) / mean(intermediate_pc, na.rm = TRUE),
+    cf_gfcf         = mean(gdp_pc, na.rm = TRUE) / mean(gfcf_pc, na.rm = TRUE)
   )
-print(conversion_factors)
+
+print(conversion_factors_pc)
+
+# Replace cf_panel with the LP-consistent version
+cf_panel <- mean(Data$gdp_pc, na.rm = TRUE) / 
+  mean(Data$milex_total_pc, na.rm = TRUE)
+
+cf_panel_pc <- mean(conversion_factors_pc$cf_milex)
+print(paste("Panel average cf (per capita):", round(cf_panel_pc, 1)))
+
+###
+
 
 # ============================================================
 # STEP 7: QUICK SANITY CHECK
@@ -486,6 +492,10 @@ print(colSums(is.na(Data %>% select(dlog_gdp, dlog_milex, dlog_gov_cons,
 # Single OLS regression at h=0 to check significance of controls
 # ============================================================
 
+
+library(fixest)
+library(tidyverse)
+
 validation_data <- Data %>%
   arrange(country, year) %>%
   group_by(country) %>%
@@ -509,7 +519,7 @@ fit_validation <- feols(
   + dlog_capital
   | country + year,
   data     = validation_data,
-  cluster  = ~country,
+  vcov = ~country,
   panel.id = ~country + year
 )
 
@@ -638,7 +648,7 @@ for (h in 0:H) {
   ))
   
   fit_h <- feols(formula_h, data = Data_h,
-                 cluster = ~country, # cluster SEs by country
+                 vcov = ~country, # cluster SEs by country
                  panel.id = ~country + year)
   # Extract coefficient and SE on dlog_milex
   lp_results$beta[h + 1]   <- coef(fit_h)["dlog_milex"]
@@ -668,12 +678,12 @@ lp_results <- lp_results %>%
 # Use Denmark's conversion factor as reference
 # ============================================================
 
-cf_denmark <- conversion_factors %>%
+cf_denmark <- conversion_factors_pc %>%
   filter(country == "Denmark") %>%
   pull(cf_milex)
 
 # Panel average conversion factor
-cf_panel <- mean(conversion_factors$cf_milex)
+cf_panel <- mean(conversion_factors_pc$cf_milex)
 
 lp_results <- lp_results %>%
   mutate(
@@ -733,7 +743,7 @@ for (h in 0:H) {
   ))
   
   fit_h <- feols(formula_h, data = Data_h,
-                 cluster = ~country, panel.id = ~country + year)
+                 vcov = ~country, panel.id = ~country + year)
   
   cat("h =", h,
       "| Within R2 =", round(r2(fit_h, "war2"), 3),
@@ -767,7 +777,7 @@ for (cat_name in names(categories)) {
   
   # Conversion factor for this category (panel average)
   cf_col <- paste0("cf_", cat_name)
-  cf_cat <- mean(conversion_factors[[cf_col]], na.rm = TRUE)
+  cf_cat <- mean(conversion_factors_pc[[cf_col]], na.rm = TRUE)
   
   for (h in 0:H) {
     
@@ -794,7 +804,7 @@ for (cat_name in names(categories)) {
     ))
     
     fit_h <- feols(formula_h, data = Data_h,
-                   cluster = ~country, panel.id = ~country + year)
+                   cvoc = ~country, panel.id = ~country + year)
     
     beta_h <- coef(fit_h)[treatment_var]
     se_h   <- se(fit_h)[treatment_var]
@@ -885,9 +895,9 @@ categories <- list(
 
 cf_lookup <- c(
   total        = cf_panel,
-  personnel    = mean(conversion_factors$cf_personnel),
-  intermediate = mean(conversion_factors$cf_intermediate),
-  gfcf         = mean(conversion_factors$cf_gfcf)
+  personnel    = mean(conversion_factors_pc$cf_personnel),
+  intermediate = mean(conversion_factors_pc$cf_intermediate),
+  gfcf         = mean(conversion_factors_pc$cf_gfcf)
 )
 
 # Storage for raw betas and SEs per category per horizon
@@ -926,7 +936,7 @@ for (cat_name in names(categories)) {
     
     fit_h <- suppressMessages(
       feols(formula_h, data = Data_h,
-            cluster = ~country, panel.id = ~country + year)
+            vcov = ~country, panel.id = ~country + year)
     )
     
     beta_h <- coef(fit_h)[treatment_var]
@@ -1050,3 +1060,750 @@ latex_acc <- paste0(
 
 cat(latex_acc)
 writeLines(latex_acc, "accumulated_multipliers.tex")
+
+
+
+# ============================================================
+# IMPACT multiplier at each horizon (not cumulative sum)
+# ============================================================
+
+impact_results <- data.frame()
+
+for (cat_name in names(categories)) {
+  cf_cat <- cf_lookup[cat_name]
+  cat_data <- raw_results %>%
+    filter(category == cat_name) %>%
+    arrange(horizon)
+  
+  for (i in seq_len(nrow(cat_data))) {
+    h      <- cat_data$horizon[i]
+    b      <- cat_data$beta[i]
+    s      <- cat_data$se[i]
+    mult   <- b * cf_panel
+    mult_se <- s * cf_panel
+    tstat  <- mult / mult_se
+    stars  <- ifelse(abs(tstat) > 2.576, "***",
+                     ifelse(abs(tstat) > 1.960, "**",
+                            ifelse(abs(tstat) > 1.645, "*", "")))
+    
+    impact_results <- rbind(impact_results, data.frame(
+      category = cat_name,
+      horizon  = h,
+      mult     = round(mult, 4),
+      stars    = stars,
+      cell     = paste0(round(mult, 4), stars)
+    ))
+  }
+}
+
+table_impact <- impact_results %>%
+  select(category, horizon, cell) %>%
+  pivot_wider(names_from = horizon, values_from = cell) %>%
+  mutate(category = recode(category,
+                           total        = "Military expenditures (total)",
+                           personnel    = "Military expenditures (personnel)",
+                           intermediate = "Military expenditures (intermediate)",
+                           gfcf         = "Mil. expenditures (equipment & infra.)"
+  ))
+
+print(table_impact)
+```
+
+# ============================================================
+# Create GDP-normalised spending changes
+# ============================================================
+
+Data <- Data %>%
+  arrange(country, year) %>%
+  group_by(country) %>%
+  mutate(
+    # Change in milex as share of lagged GDP (both in same units: per capita EUR)
+    dmilex_gdpshare        = (milex_total_pc - lag(milex_total_pc)) / lag(gdp_pc),
+    dpersonnel_gdpshare    = (personnel_pc - lag(personnel_pc)) / lag(gdp_pc),
+    dintermediate_gdpshare = (intermediate_pc - lag(intermediate_pc)) / lag(gdp_pc),
+    dgfcf_gdpshare         = (gfcf_pc - lag(gfcf_pc)) / lag(gdp_pc),
+    # Dependent variable: also normalise GDP change by lagged GDP
+    dy_gdpshare            = (gdp_pc - lag(gdp_pc)) / lag(gdp_pc)
+  ) %>%
+  ungroup()
+
+
+
+formula_rz <- as.formula(paste0(
+  "dy_gdpshare ~ dmilex_gdpshare",
+  " + lag(dy_gdpshare, 1)",
+  " + output_gap + inflation + unemployment",
+  " + dlog_gov_cons + dlog_private_invest + dlog_capital",
+  " | country + year"
+))
+
+# ============================================================
+# RAMEY-ZUBAIRY SPECIFICATION
+# Both GDP and spending normalised by lagged GDP
+# Coefficient IS the multiplier directly — no conversion needed
+# ============================================================
+
+H <- 5
+
+categories_rz <- list(
+  total        = "dmilex_gdpshare",
+  personnel    = "dpersonnel_gdpshare",
+  intermediate = "dintermediate_gdpshare",
+  gfcf         = "dgfcf_gdpshare"
+)
+
+rz_results <- data.frame()
+
+for (cat_name in names(categories_rz)) {
+  
+  treatment_var <- categories_rz[[cat_name]]
+  
+  for (h in 1:H) {
+    
+    Data_h <- Data %>%
+      arrange(country, year) %>%
+      group_by(country) %>%
+      mutate(y_fwd = lead(dy_gdpshare, h)) %>%
+      ungroup() %>%
+      filter(!is.na(y_fwd),
+             !is.na(.data[[treatment_var]]),
+             !is.na(dy_gdpshare),
+             !is.na(output_gap),
+             !is.na(inflation),
+             !is.na(unemployment),
+             !is.na(dlog_gov_cons),
+             !is.na(dlog_private_invest),
+             !is.na(dlog_capital))
+    
+    formula_h <- as.formula(paste0(
+      "y_fwd ~ ", treatment_var,
+      " + lag(dy_gdpshare, 1)",
+      " + output_gap + inflation + unemployment",
+      " + dlog_gov_cons + dlog_private_invest + dlog_capital",
+      " | country + year"
+    ))
+    
+    fit_h <- suppressMessages(
+      feols(formula_h, data = Data_h,
+            cluster = ~country, panel.id = ~country + year)
+    )
+    
+    beta_h <- coef(fit_h)[treatment_var]
+    se_h   <- se(fit_h)[treatment_var]
+    
+    # Beta IS already the multiplier — no conversion needed
+    tstat <- beta_h / se_h
+    stars <- ifelse(abs(tstat) > 2.576, "***",
+                    ifelse(abs(tstat) > 1.960, "**",
+                           ifelse(abs(tstat) > 1.645, "*", "")))
+    
+    rz_results <- rbind(rz_results, data.frame(
+      category  = cat_name,
+      horizon   = h,
+      mult      = round(beta_h, 4),
+      se        = round(se_h, 4),
+      tstat     = round(tstat, 3),
+      stars     = stars,
+      cell      = paste0(round(beta_h, 4), stars)
+    ))
+  }
+}
+
+# ============================================================
+# PRINT TABLE
+# ============================================================
+
+table_rz <- rz_results %>%
+  select(category, horizon, cell) %>%
+  pivot_wider(names_from = horizon, values_from = cell) %>%
+  mutate(category = recode(category,
+                           total        = "Military expenditures (total)",
+                           personnel    = "Military expenditures (personnel)",
+                           intermediate = "Military expenditures (intermediate)",
+                           gfcf         = "Mil. expenditures (equipment & infra.)"
+  ))
+
+print(table_rz)
+
+# Also print raw betas and SEs for inspection
+print(rz_results %>% select(category, horizon, mult, se, tstat, stars))
+
+
+# Sanity check on R-Z variables
+Data %>%
+  filter(country == "Denmark") %>%
+  select(year, gdp_pc, milex_total_pc, 
+         dmilex_gdpshare, dy_gdpshare) %>%
+  head(10) %>%
+  print()
+
+# Summary statistics — should be small fractions (0.001 to 0.02 range)
+cat("dmilex_gdpshare range:\n")
+print(summary(Data$dmilex_gdpshare))
+
+cat("\ndy_gdpshare range:\n")  
+print(summary(Data$dy_gdpshare))
+
+cat("\ndpersonnel_gdpshare range:\n")
+print(summary(Data$dpersonnel_gdpshare))
+
+
+# Compare variability of the treatment variables
+Data %>%
+  summarise(
+    sd_total        = sd(dmilex_gdpshare, na.rm=TRUE),
+    sd_personnel    = sd(dpersonnel_gdpshare, na.rm=TRUE),
+    sd_intermediate = sd(dintermediate_gdpshare, na.rm=TRUE),
+    sd_gfcf         = sd(dgfcf_gdpshare, na.rm=TRUE)
+  ) %>%
+  print()
+
+
+# ============================================================
+# COMPLETE BOOTSTRAP SCRIPT — fixest 0.13.0 compatible
+# Run from scratch in current session
+# ============================================================
+
+# Three ways to compute cf — compare them
+cf_v1 <- mean(conversion_factors$cf_milex)          # mean of country ratios (current)
+cf_v2 <- mean(Data$gdp_real, na.rm=TRUE) / 
+  mean(Data$milex_total_real, na.rm=TRUE)     # panel aggregate ratio
+cf_v3 <- mean(Data$gdp_pc, na.rm=TRUE) / 
+  mean(Data$milex_total_pc, na.rm=TRUE)       # per capita (matches LP variables)
+
+
+fixest_startup_msg(FALSE)
+
+# Wild cluster bootstrap function
+wild_cluster_pval <- function(fit, var_name, data_h, B = 4999, seed = 42) {
+  set.seed(seed)
+  countries <- unique(data_h$country)
+  G         <- length(countries)
+  t_obs     <- coef(fit)[var_name] / se(fit)[var_name]
+  resid_h   <- residuals(fit)
+  fitted_h  <- fitted(fit)
+  t_boot    <- numeric(B)
+  
+  for (b in 1:B) {
+    w              <- sample(c(-1, 1), G, replace = TRUE)
+    names(w)       <- countries
+    data_h$w_boot  <- w[data_h$country]
+    data_h$y_wc    <- fitted_h + data_h$w_boot * resid_h
+    formula_b      <- update(formula(fit), y_wc ~ .)
+    fit_b <- tryCatch(
+      feols(formula_b, data = data_h,
+            vcov = ~country, panel.id = ~country + year),
+      error = function(e) NULL
+    )
+    if (!is.null(fit_b) && var_name %in% names(coef(fit_b))) {
+      t_boot[b] <- coef(fit_b)[var_name] / se(fit_b)[var_name]
+    } else {
+      t_boot[b] <- 0
+    }
+  }
+  mean(abs(t_boot) >= abs(t_obs), na.rm = TRUE)
+}
+
+# Main loop
+H            <- 5
+boot_results <- data.frame()
+
+for (h in 1:H) {
+  
+  Data_h <- Data %>%
+    arrange(country, year) %>%
+    group_by(country) %>%
+    mutate(y_fwd = lead(dlog_gdp, h)) %>%
+    ungroup() %>%
+    filter(!is.na(y_fwd), !is.na(dlog_milex), !is.na(dlog_gdp),
+           !is.na(output_gap), !is.na(inflation), !is.na(unemployment),
+           !is.na(dlog_gov_cons), !is.na(dlog_private_invest),
+           !is.na(dlog_capital))
+  
+  fit_h <- suppressWarnings(suppressMessages(feols(
+    y_fwd ~ dlog_milex + lag(dlog_gdp, 1) + output_gap +
+      inflation + unemployment + dlog_gov_cons +
+      dlog_private_invest + dlog_capital | country + year,
+    data     = Data_h,
+    vcov     = ~country,
+    panel.id = ~country + year
+  )))
+  
+  beta_h  <- coef(fit_h)["dlog_milex"]
+  se_h    <- se(fit_h)["dlog_milex"]
+  p_clust <- 2 * pt(-abs(beta_h / se_h), df = 7)
+  
+  cat("h =", h, "| beta =", round(beta_h, 5),
+      "| se =", round(se_h, 5),
+      "| p_clust =", round(p_clust, 4),
+      "| bootstrapping... ")
+  
+  p_boot <- wild_cluster_pval(fit_h, "dlog_milex", Data_h, B = 4999)
+  
+  cat("p_boot =", round(p_boot, 4), "\n")
+  
+  boot_results <- rbind(boot_results, data.frame(
+    h           = h,
+    beta        = round(beta_h, 5),
+    se          = round(se_h, 5),
+    multiplier  = round(beta_h * cf_v3, 4),
+    p_cluster   = round(p_clust, 4),
+    p_bootstrap = round(p_boot, 4),
+    sig_clust   = ifelse(p_clust < 0.01, "***",
+                         ifelse(p_clust < 0.05, "**",
+                                ifelse(p_clust < 0.10, "*", ""))),
+    sig_boot    = ifelse(p_boot  < 0.01, "***",
+                         ifelse(p_boot  < 0.05, "**",
+                                ifelse(p_boot  < 0.10, "*", "")))
+  ))
+}
+
+cat("\n=== FINAL BOOTSTRAP RESULTS ===\n")
+print(boot_results)
+
+# ============================================================
+# FIXED BOOTSTRAP FUNCTION
+# Explicitly builds formula instead of using update()
+# ============================================================
+
+wild_cluster_pval_v2 <- function(fit, var_name, data_h, 
+                                 B = 4999, seed = 42) {
+  set.seed(seed)
+  countries <- unique(data_h$country)
+  G         <- length(countries)
+  t_obs     <- coef(fit)[var_name] / se(fit)[var_name]
+  resid_h   <- residuals(fit)
+  fitted_h  <- fitted(fit)
+  t_boot    <- numeric(B)
+  
+  # Extract RHS of formula explicitly (everything after ~)
+  fml       <- formula(fit)
+  rhs       <- as.character(fml)[3]   # right hand side as string
+  
+  for (b in 1:B) {
+    w              <- sample(c(-1, 1), G, replace = TRUE)
+    names(w)       <- countries
+    data_h$w_boot  <- w[data_h$country]
+    data_h$y_wc    <- fitted_h + data_h$w_boot * resid_h
+    
+    # Build formula explicitly with y_wc as LHS
+    formula_b <- as.formula(paste("y_wc ~", rhs))
+    
+    fit_b <- tryCatch(
+      feols(formula_b, data = data_h,
+            vcov = ~country, panel.id = ~country + year),
+      error   = function(e) NULL,
+      warning = function(w) suppressWarnings(
+        feols(formula_b, data = data_h,
+              vcov = ~country, panel.id = ~country + year)
+      )
+    )
+    
+    if (!is.null(fit_b) && var_name %in% names(coef(fit_b))) {
+      t_boot[b] <- coef(fit_b)[var_name] / se(fit_b)[var_name]
+    } else {
+      t_boot[b] <- NA
+    }
+  }
+  
+  # Remove failed draws and compute p-value
+  t_boot <- t_boot[!is.na(t_boot)]
+  cat("  (", length(t_boot), "valid draws)\n")
+  mean(abs(t_boot) >= abs(t_obs))
+}
+
+# ============================================================
+# Quick diagnostic: test on h=1 with B=99 first
+# ============================================================
+
+Data_h1 <- Data %>%
+  arrange(country, year) %>%
+  group_by(country) %>%
+  mutate(y_fwd = lead(dlog_gdp, 1)) %>%
+  ungroup() %>%
+  filter(!is.na(y_fwd), !is.na(dlog_milex), !is.na(dlog_gdp),
+         !is.na(output_gap), !is.na(inflation), !is.na(unemployment),
+         !is.na(dlog_gov_cons), !is.na(dlog_private_invest),
+         !is.na(dlog_capital))
+
+fit_h1 <- feols(
+  y_fwd ~ dlog_milex + lag(dlog_gdp, 1) + output_gap +
+    inflation + unemployment + dlog_gov_cons +
+    dlog_private_invest + dlog_capital | country + year,
+  data = Data_h1, vcov = ~country, panel.id = ~country + year
+)
+
+cat("Observed t-stat at h=1:", 
+    round(coef(fit_h1)["dlog_milex"] / se(fit_h1)["dlog_milex"], 4), "\n")
+
+# Run with B=99 to check distribution quickly
+p_test <- wild_cluster_pval_v2(fit_h1, "dlog_milex", Data_h1, B = 99)
+cat("Test p_boot (B=99):", round(p_test, 4), "\n")
+cat("Expected: should be around 0.70 (matching p_clust = 0.69)\n")
+
+options(warn = -1)
+H <- 5
+boot_results <- data.frame()
+
+for (h in 1:H) {
+  
+  Data_h <- Data %>%
+    arrange(country, year) %>%
+    group_by(country) %>%
+    mutate(y_fwd = lead(dlog_gdp, h)) %>%
+    ungroup() %>%
+    filter(!is.na(y_fwd), !is.na(dlog_milex), !is.na(dlog_gdp),
+           !is.na(output_gap), !is.na(inflation), !is.na(unemployment),
+           !is.na(dlog_gov_cons), !is.na(dlog_private_invest),
+           !is.na(dlog_capital))
+  
+  fit_h <- feols(
+    y_fwd ~ dlog_milex + lag(dlog_gdp, 1) + output_gap +
+      inflation + unemployment + dlog_gov_cons +
+      dlog_private_invest + dlog_capital | country + year,
+    data = Data_h, vcov = ~country, panel.id = ~country + year
+  )
+  
+  beta_h  <- coef(fit_h)["dlog_milex"]
+  se_h    <- se(fit_h)["dlog_milex"]
+  p_clust <- 2 * pt(-abs(beta_h / se_h), df = 7)
+  
+  cat("h =", h, "| beta =", round(beta_h, 5),
+      "| p_clust =", round(p_clust, 4), "| bootstrapping...")
+  
+  p_boot <- wild_cluster_pval_v2(fit_h, "dlog_milex", Data_h, B = 4999)
+  
+  cat("p_boot =", round(p_boot, 4), "\n")
+  
+  boot_results <- rbind(boot_results, data.frame(
+    h           = h,
+    beta        = round(beta_h, 5),
+    se          = round(se_h, 5),
+    multiplier  = round(beta_h * cf_v3, 4),
+    p_cluster   = round(p_clust, 4),
+    p_bootstrap = round(p_boot, 4),
+    sig_clust   = ifelse(p_clust < 0.01, "***",
+                         ifelse(p_clust < 0.05, "**",
+                                ifelse(p_clust < 0.10, "*", ""))),
+    sig_boot    = ifelse(p_boot  < 0.01, "***",
+                         ifelse(p_boot  < 0.05, "**",
+                                ifelse(p_boot  < 0.10, "*", "")))
+  ))
+}
+
+options(warn = 0)
+cat("\n=== BOOTSTRAP RESULTS ===\n")
+print(boot_results)
+
+
+# ============================================================
+# WILD CLUSTER BOOTSTRAP — ALL DISAGGREGATED CATEGORIES
+# ============================================================
+
+options(warn = -1)
+
+categories_boot <- list(
+  total        = "dlog_milex",
+  personnel    = "dlog_personnel",
+  intermediate = "dlog_intermediate",
+  gfcf         = "dlog_gfcf"
+)
+
+H <- 5
+disagg_boot_results <- data.frame()
+
+for (cat_name in names(categories_boot)) {
+  
+  treatment_var <- categories_boot[[cat_name]]
+  cf_cat        <- cf_v3  # use consistent per-capita cf for all
+  
+  cat("\n--- Category:", cat_name, "---\n")
+  
+  for (h in 1:H) {
+    
+    Data_h <- Data %>%
+      arrange(country, year) %>%
+      group_by(country) %>%
+      mutate(y_fwd = lead(dlog_gdp, h)) %>%
+      ungroup() %>%
+      filter(!is.na(y_fwd),
+             !is.na(.data[[treatment_var]]),
+             !is.na(dlog_gdp),
+             !is.na(output_gap),
+             !is.na(inflation),
+             !is.na(unemployment),
+             !is.na(dlog_gov_cons),
+             !is.na(dlog_private_invest),
+             !is.na(dlog_capital))
+    
+    formula_h <- as.formula(paste0(
+      "y_fwd ~ ", treatment_var,
+      " + lag(dlog_gdp, 1)",
+      " + output_gap + inflation + unemployment",
+      " + dlog_gov_cons + dlog_private_invest + dlog_capital",
+      " | country + year"
+    ))
+    
+    fit_h <- feols(formula_h, data = Data_h,
+                   vcov = ~country, panel.id = ~country + year)
+    
+    beta_h  <- coef(fit_h)[treatment_var]
+    se_h    <- se(fit_h)[treatment_var]
+    p_clust <- 2 * pt(-abs(beta_h / se_h), df = 7)
+    
+    cat("  h =", h, "| beta =", round(beta_h, 5),
+        "| p_clust =", round(p_clust, 4), "| boot...")
+    
+    p_boot <- wild_cluster_pval_v2(
+      fit_h, treatment_var, Data_h, B = 4999
+    )
+    
+    cat("p_boot =", round(p_boot, 4), "\n")
+    
+    disagg_boot_results <- rbind(disagg_boot_results, data.frame(
+      category    = cat_name,
+      h           = h,
+      beta        = round(beta_h, 5),
+      se          = round(se_h, 5),
+      multiplier  = round(beta_h * cf_cat, 4),
+      p_cluster   = round(p_clust, 4),
+      p_bootstrap = round(p_boot, 4),
+      sig_clust   = ifelse(p_clust < 0.01, "***",
+                           ifelse(p_clust < 0.05, "**",
+                                  ifelse(p_clust < 0.10, "*", ""))),
+      sig_boot    = ifelse(p_boot  < 0.01, "***",
+                           ifelse(p_boot  < 0.05, "**",
+                                  ifelse(p_boot  < 0.10, "*", "")))
+    ))
+  }
+}
+
+options(warn = 0)
+
+cat("\n=== DISAGGREGATED BOOTSTRAP RESULTS ===\n")
+print(disagg_boot_results)
+
+# Pivot to wide table for easy reading
+disagg_boot_results %>%
+  mutate(
+    cell = paste0(
+      round(multiplier, 2),
+      sig_clust,
+      " [", round(p_bootstrap, 2), "]"
+    )
+  ) %>%
+  select(category, h, cell) %>%
+  pivot_wider(names_from = h, values_from = cell) %>%
+  print()
+```
+
+
+
+# ============================================================
+# VERIFY FIXED EFFECTS IMPLEMENTATION
+# ============================================================
+
+# Check 1: fixef() extracts the estimated FE values
+Data_h1 <- Data %>%
+  arrange(country, year) %>%
+  group_by(country) %>%
+  mutate(y_fwd = lead(dlog_gdp, 1)) %>%
+  ungroup() %>%
+  filter(!is.na(y_fwd), !is.na(dlog_milex), !is.na(dlog_gdp),
+         !is.na(output_gap), !is.na(inflation), !is.na(unemployment),
+         !is.na(dlog_gov_cons), !is.na(dlog_private_invest),
+         !is.na(dlog_capital))
+
+fit_h1 <- feols(
+  y_fwd ~ dlog_milex + lag(dlog_gdp, 1) + output_gap +
+    inflation + unemployment + dlog_gov_cons +
+    dlog_private_invest + dlog_capital | country + year,
+  data = Data_h1, vcov = ~country, panel.id = ~country + year
+)
+
+# Extract country fixed effects
+country_fe <- fixef(fit_h1)$country
+year_fe    <- fixef(fit_h1)$year
+
+cat("=== COUNTRY FIXED EFFECTS ===\n")
+print(round(sort(country_fe), 4))
+
+cat("\n=== YEAR FIXED EFFECTS ===\n")
+print(round(year_fe, 5))
+
+# Check 2: confirm FE are jointly significant
+cat("\n=== WALD TEST: ARE FE JOINTLY SIGNIFICANT? ===\n")
+# Compare with OLS (no FE)
+fit_no_fe <- feols(
+  y_fwd ~ dlog_milex + lag(dlog_gdp, 1) + output_gap +
+    inflation + unemployment + dlog_gov_cons +
+    dlog_private_invest + dlog_capital,
+  data = Data_h1, vcov = ~country
+)
+
+cat("R2 with FE:    ", round(r2(fit_h1, "r2"), 4), "\n")
+cat("R2 without FE: ", round(r2(fit_no_fe, "r2"), 4), "\n")
+cat("Within R2:     ", round(r2(fit_h1, "war2"), 4), "\n")
+cat("N observations:", nobs(fit_h1), "\n")
+
+# Check 3: how many df do FE absorb?
+cat("\nDF absorbed by country FE:", length(country_fe) - 1, "\n")
+cat("DF absorbed by year FE:   ", length(year_fe) - 1, "\n")
+cat("Total df absorbed:        ", length(country_fe) + length(year_fe) - 2, "\n")
+cat("Remaining df for inference:", nobs(fit_h1) - length(country_fe) - length(year_fe) - 8, "\n")
+# 8 = number of RHS variables
+
+
+# ============================================================
+# NEWEY-WEST WITH HORIZON-APPROPRIATE BANDWIDTH
+# Following Jordà & Taylor (2024) recommendation
+# ============================================================
+
+H <- 5
+nw_results <- data.frame()
+
+for (h in 1:H) {
+  
+  Data_h <- Data %>%
+    arrange(country, year) %>%
+    group_by(country) %>%
+    mutate(y_fwd = lead(dlog_gdp, h)) %>%
+    ungroup() %>%
+    filter(!is.na(y_fwd), !is.na(dlog_milex), !is.na(dlog_gdp),
+           !is.na(output_gap), !is.na(inflation), !is.na(unemployment),
+           !is.na(dlog_gov_cons), !is.na(dlog_private_invest),
+           !is.na(dlog_capital))
+  
+  # NW bandwidth = h (horizon-appropriate, Jordà & Taylor 2024)
+  fit_nw <- feols(
+    y_fwd ~ dlog_milex + lag(dlog_gdp, 1) + output_gap +
+      inflation + unemployment + dlog_gov_cons +
+      dlog_private_invest + dlog_capital | country + year,
+    data     = Data_h,
+    vcov     = NW(h),          # bandwidth = horizon
+    panel.id = ~country + year
+  )
+  
+  # Also Driscoll-Kraay with same bandwidth
+  fit_dk <- feols(
+    y_fwd ~ dlog_milex + lag(dlog_gdp, 1) + output_gap +
+      inflation + unemployment + dlog_gov_cons +
+      dlog_private_invest + dlog_capital | country + year,
+    data     = Data_h,
+    vcov     = DK(lag = h),    # DK bandwidth = horizon
+    panel.id = ~country + year
+  )
+  
+  beta_h   <- coef(fit_nw)["dlog_milex"]
+  se_nw    <- se(fit_nw)["dlog_milex"]
+  se_dk    <- se(fit_dk)["dlog_milex"]
+  
+  # Use T-N-K degrees of freedom for NW (not G-1)
+  df_nw    <- nobs(fit_nw) - length(unique(Data_h$country)) - 
+    length(unique(Data_h$year)) - 8
+  
+  p_nw     <- 2 * pt(-abs(beta_h / se_nw), df = df_nw)
+  p_dk     <- 2 * pt(-abs(beta_h / se_dk), df = df_nw)
+  
+  nw_results <- rbind(nw_results, data.frame(
+    h        = h,
+    beta     = round(beta_h, 5),
+    mult     = round(beta_h * cf_v3, 3),
+    se_nw    = round(se_nw, 5),
+    se_dk    = round(se_dk, 5),
+    p_nw     = round(p_nw, 4),
+    p_dk     = round(p_dk, 4),
+    sig_nw   = ifelse(p_nw < 0.01,"***",ifelse(p_nw < 0.05,"**",ifelse(p_nw < 0.10,"*",""))),
+    sig_dk   = ifelse(p_dk < 0.01,"***",ifelse(p_dk < 0.05,"**",ifelse(p_dk < 0.10,"*","")))
+  ))
+}
+
+print(nw_results)
+
+
+# ============================================================
+# THREE-WAY SE COMPARISON FOR YOUR LP
+# Cluster vs Newey-West vs Driscoll-Kraay
+# ============================================================
+
+H <- 5
+se_compare <- data.frame()
+
+for (h in 1:H) {
+  
+  Data_h <- Data %>%
+    arrange(country, year) %>%
+    group_by(country) %>%
+    mutate(y_fwd = lead(dlog_gdp, h)) %>%
+    ungroup() %>%
+    filter(!is.na(y_fwd), !is.na(dlog_milex), !is.na(dlog_gdp),
+           !is.na(output_gap), !is.na(inflation), !is.na(unemployment),
+           !is.na(dlog_gov_cons), !is.na(dlog_private_invest),
+           !is.na(dlog_capital))
+  
+  # 1. Current: cluster-robust
+  fit_cl <- suppressWarnings(feols(
+    y_fwd ~ dlog_milex + lag(dlog_gdp,1) + output_gap +
+      inflation + unemployment + dlog_gov_cons +
+      dlog_private_invest + dlog_capital | country + year,
+    data = Data_h, vcov = ~country, panel.id = ~country + year
+  ))
+  
+  # 2. Newey-West, bandwidth = h (Olejnik approach)
+  fit_nw <- suppressWarnings(feols(
+    y_fwd ~ dlog_milex + lag(dlog_gdp,1) + output_gap +
+      inflation + unemployment + dlog_gov_cons +
+      dlog_private_invest + dlog_capital | country + year,
+    data = Data_h, vcov = NW(h), panel.id = ~country + year
+  ))
+  
+  # 3. Driscoll-Kraay, bandwidth = h (recommended for panel LP)
+  fit_dk <- suppressWarnings(feols(
+    y_fwd ~ dlog_milex + lag(dlog_gdp,1) + output_gap +
+      inflation + unemployment + dlog_gov_cons +
+      dlog_private_invest + dlog_capital | country + year,
+    data = Data_h, vcov = DK(lag = h), panel.id = ~country + year
+  ))
+  
+  beta   <- coef(fit_cl)["dlog_milex"]
+  se_cl  <- se(fit_cl)["dlog_milex"]
+  se_nw  <- se(fit_nw)["dlog_milex"]
+  se_dk  <- se(fit_dk)["dlog_milex"]
+  
+  # Degrees of freedom
+  df_cl  <- 7                                    # G-1 = 8-1
+  df_nw  <- nobs(fit_nw) - length(unique(Data_h$country)) -
+    length(unique(Data_h$year)) - 8     # T*N - FE - vars
+  df_dk  <- df_nw
+  
+  p_cl   <- 2 * pt(-abs(beta/se_cl), df = df_cl)
+  p_nw   <- 2 * pt(-abs(beta/se_nw), df = df_nw)
+  p_dk   <- 2 * pt(-abs(beta/se_dk), df = df_dk)
+  
+  se_compare <- rbind(se_compare, data.frame(
+    h      = h,
+    beta   = round(beta, 5),
+    mult   = round(beta * cf_v3, 3),
+    se_cl  = round(se_cl, 5),
+    se_nw  = round(se_nw, 5),
+    se_dk  = round(se_dk, 5),
+    p_cl   = round(p_cl, 4),
+    p_nw   = round(p_nw, 4),
+    p_dk   = round(p_dk, 4),
+    sig_cl = ifelse(p_cl<0.01,"***",ifelse(p_cl<0.05,"**",ifelse(p_cl<0.10,"*",""))),
+    sig_nw = ifelse(p_nw<0.01,"***",ifelse(p_nw<0.05,"**",ifelse(p_nw<0.10,"*",""))),
+    sig_dk = ifelse(p_dk<0.01,"***",ifelse(p_dk<0.05,"**",ifelse(p_dk<0.10,"*","")))
+  ))
+  
+  cat("h=", h, 
+      "| SE_cl=", round(se_cl,5),
+      "| SE_NW=", round(se_nw,5),
+      "| SE_DK=", round(se_dk,5),
+      "| sig:", 
+      ifelse(p_cl<0.1,"*",""),"/",
+      ifelse(p_nw<0.1,"*",""),"/",
+      ifelse(p_dk<0.1,"*",""), "\n")
+}
+
+print(se_compare)
+
